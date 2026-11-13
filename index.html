@@ -509,5 +509,190 @@ function a0_0xc802(){const _0x51fda2=['jYKIpGOGicaGia','l3rOpJX0Ad7NLkpMRke','y2
   });
 })();
 </script>
+<style id="mt-patch-20261113">
+/* 2026-11-13 追記：異常値の蛍光マーカー・印刷の改ページ */
+mark.hl{background:linear-gradient(transparent 30%,#fff176 30%);color:inherit;padding:0 3px;border-radius:2px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.hl-note{font-size:11px;color:#5f6368;margin:-4px 0 10px}
+.hl-note mark.hl{font-weight:600}
+@media print{
+  .tbl-wrap{overflow:visible!important}
+  .rsect{page-break-inside:auto!important;break-inside:auto!important}
+  .rsect-title,.rsect-sub,.sect-page-title,.alert-pct{page-break-after:avoid;break-after:avoid}
+  .chart-card,.charts-row,.pie-grid,.pie-cell,.stats-grid,.legend,svg{page-break-inside:avoid;break-inside:avoid}
+  table{page-break-inside:auto}
+  tr{page-break-inside:avoid;break-inside:avoid}
+}
+</style>
+<script>
+/* 2026-11-13 追記：本体は難読化済みのため、描画関数をここで上書きする。
+   - pie: 1区分だけで100%になると円が描かれない不具合を修正（初産LS円グラフ）
+   - 表：異常値を蛍光マーカー（mark.hl）で表示
+   - 乳量15%以上減少の表：DIM順に並べる */
+(function () {
+  /* ---- 異常値の基準 ---- */
+  var TH = { scc: 310, ls: 5, fat: 4.6, bhb: 0.13, denovoEarly: 22, denovoLate: 28, drop: 0.15 };
+  var esc = function (v) { return v === null || v === undefined ? '' : String(v).replace(/[&<>"']/g, function (m) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]; }); };
+  var isNum = function (v) { return v !== null && v !== undefined && !isNaN(v); };
+  var hl = function (cond, html) { return cond ? '<mark class="hl">' + html + '</mark>' : html; };
+  var sccCls = function (v) { return v >= 310 ? 'scc-hi' : v >= 200 ? 'scc-mid' : ''; };
+  var lsCls = function (v) { return v >= 5 ? 'ls-bad' : v >= 3 ? 'ls-warn' : 'ls-good'; };
+  var ab = {
+    scc: function (v) { return isNum(v) && v >= TH.scc; },
+    ls: function (v) { return isNum(v) && v >= TH.ls; },
+    fat: function (v) { return isNum(v) && v >= TH.fat; },
+    bhb: function (v) { return isNum(v) && v >= TH.bhb; },
+    denovo: function (c) { return isNum(c.denovoFA) && isNum(c.dim) && (c.dim <= 60 ? c.denovoFA < TH.denovoEarly : c.denovoFA < TH.denovoLate); }
+  };
+  var cScc = function (v) { return hl(ab.scc(v), v !== null ? fmtMan(v) + '万' : '-'); };
+  var cLs = function (v) { return hl(ab.ls(v), v ?? '-'); };
+  var cFat = function (v) { return hl(ab.fat(v), fmt(v, 2)); };
+  var cBhb = function (v) { return hl(ab.bhb(v), v !== null ? v.toFixed(2) : '-'); };
+  var cDenovo = function (c) { return hl(ab.denovo(c), c.denovoFA !== null ? c.denovoFA.toFixed(1) + '%' : '-'); };
+  var NOTE = '<p class="hl-note"><mark class="hl">マーカー</mark>＝異常値（体細胞31万以上・LS5以上・乳脂率4.6%以上・BHB0.13以上・デノボFA DIM≤60で22%未満／61日以上で28%未満）</p>';
+
+  /* ---- 円グラフ：1区分100%でも描く ---- */
+  window.pie = function (data, size) {
+    size = size || 160;
+    var total = data.reduce(function (s, d) { return s + d.v; }, 0);
+    if (!total) {
+      return '<svg width="' + size + '" height="' + size + '"><text x="' + size / 2 + '" y="' + size / 2 + '" text-anchor="middle" font-size="12" fill="#bbb">データなし</text></svg>';
+    }
+    var cx = size / 2, cy = size / 2, r = size * 0.4, a = -Math.PI / 2, out = '';
+    var fs = size < 120 ? 9 : 10;
+    data.forEach(function (d) {
+      if (!d.v) return;
+      if (d.v === total) {
+        out += '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="' + d.c + '" stroke="#fff" stroke-width="2"/>';
+        out += '<text x="' + cx + '" y="' + cy + '" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="' + fs + '" font-weight="600">' + d.v + '</text>';
+        return;
+      }
+      var ang = d.v / total * 2 * Math.PI;
+      var x1 = cx + r * Math.cos(a), y1 = cy + r * Math.sin(a);
+      var x2 = cx + r * Math.cos(a + ang), y2 = cy + r * Math.sin(a + ang);
+      var large = ang > Math.PI ? 1 : 0;
+      var lx = cx + r * 0.65 * Math.cos(a + ang / 2), ly = cy + r * 0.65 * Math.sin(a + ang / 2);
+      var pct = Math.round(d.v / total * 100);
+      out += '<path d="M' + cx + ',' + cy + 'L' + x1.toFixed(1) + ',' + y1.toFixed(1) + 'A' + r + ',' + r + ' 0 ' + large + ' 1 ' + x2.toFixed(1) + ',' + y2.toFixed(1) + 'Z" fill="' + d.c + '" stroke="#fff" stroke-width="2"/>';
+      if (pct >= 8) out += '<text x="' + lx.toFixed(1) + '" y="' + ly.toFixed(1) + '" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="' + fs + '" font-weight="600">' + d.v + '</text>';
+      a += ang;
+    });
+    return '<svg viewBox="0 0 ' + size + ' ' + size + '" width="' + size + '" height="' + size + '">' + out + '</svg>';
+  };
+
+  /* ---- ② 乳質 ---- */
+  var origMilkQuality = window.renderMilkQuality;
+  window.renderMilkQuality = function (cows) {
+    var html = origMilkQuality(cows);
+    var list = cows.filter(function (c) { return c.scc !== null && c.scc >= 310; })
+      .sort(function (a, b) { return (b.scc ?? 0) - (a.scc ?? 0); });
+    if (!list.length) return html;
+    var row = function (c) {
+      return '<tr><td><strong>#' + esc(c.code) + '</strong></td><td>' + esc(c.parity ?? '-') + '</td><td>' + esc(c.dim ?? '-') + '</td><td>' + fmt(c.milk, 1) + '</td>'
+        + '<td class="' + sccCls(c.scc) + '">' + cScc(c.scc) + ' ' + (c.markScc ? '<span style="font-size:10px">' + esc(c.markScc) + '</span>' : '') + '</td>'
+        + '<td>' + cScc(c.prevScc) + '</td>'
+        + '<td class="' + lsCls(c.sccScore) + '">' + cLs(c.sccScore) + '</td><td>' + esc(c.mgmt || '-') + '</td></tr>';
+    };
+    var tbody = '<tbody>' + list.map(row).join('') + '</tbody>';
+    // 先頭の表（体細胞31万以上）の tbody だけ差し替える
+    return html.replace(/<tbody>[\s\S]*?<\/tbody>/, tbody).replace('<div class="tbl-wrap">', NOTE + '<div class="tbl-wrap">');
+  };
+
+  /* ---- ③ 初産・④ 2産以上 の個体表 ---- */
+  var parityRow = function (c) {
+    return '<tr><td><strong>#' + esc(c.code) + '</strong></td><td>' + esc(c.parity) + '</td><td>' + fmt(c.milk, 1) + '</td><td>' + esc(c.dim ?? '-') + '</td>'
+      + '<td class="' + sccCls(c.scc) + '">' + cScc(c.scc) + '</td>'
+      + '<td>' + cFat(c.fat) + '</td><td>' + cBhb(c.bhb) + '</td><td>' + cDenovo(c) + '</td><td>' + esc(c.mgmt || '-') + '</td></tr>';
+  };
+  var replaceFirstTbody = function (html, rows) {
+    return html.replace(/<tbody>[\s\S]*?<\/tbody>/, '<tbody>' + rows + '</tbody>').replace('<div class="tbl-wrap">', NOTE + '<div class="tbl-wrap">');
+  };
+  var origFirst = window.renderFirstParity;
+  window.renderFirstParity = function (cows) {
+    var html = origFirst(cows);
+    var t = S.target1 || 30;
+    var list = cows.filter(function (c) { return c.parity === 1 && c.dim !== null && c.dim <= 100 && c.milk !== null && c.milk < t; });
+    return list.length ? replaceFirstTbody(html, list.map(parityRow).join('')) : html;
+  };
+  var origMulti = window.renderMultiParity;
+  window.renderMultiParity = function (cows) {
+    var html = origMulti(cows);
+    var t = S.target2p || 35;
+    var list = cows.filter(function (c) { return c.parity >= 2 && c.dim !== null && c.dim <= 100 && c.milk !== null && c.milk < t; });
+    if (list.length) html = replaceFirstTbody(html, list.map(parityRow).join(''));
+    // 産次別平均成績（平均値にも同じ基準を当てる）
+    var groups = [1, 2, 3, 4, 5].map(function (p) {
+      return { p: p, cows: cows.filter(function (c) { return p < 5 ? c.parity === p : c.parity >= 5; }) };
+    }).filter(function (g) { return g.cows.length; });
+    var avgRows = groups.map(function (g) {
+      var sc = avg(g.cows, function (c) { return c.scc; });
+      var ls = avg(g.cows, function (c) { return c.sccScore; });
+      var fat = avg(g.cows, function (c) { return c.fat; });
+      return '<tr><td>' + (g.p < 5 ? g.p + '産' : '5産以上') + '</td><td>' + g.cows.length + '頭</td>'
+        + '<td>' + fmt(avg(g.cows, function (c) { return c.milk; }), 1) + '</td>'
+        + '<td>' + fmt(avg(g.cows, function (c) { return c.prevMilk; }), 1) + '</td>'
+        + '<td>' + hl(ab.fat(fat), fmt(fat, 2)) + '</td>'
+        + '<td>' + fmt(avg(g.cows, function (c) { return c.snf; }), 2) + '</td>'
+        + '<td>' + hl(ab.scc(sc), sc !== null ? fmtMan(sc) : '-') + '</td>'
+        + '<td>' + hl(isNum(ls) && ls >= TH.ls, fmt(ls, 1)) + '</td>'
+        + '<td>' + fmt(avg(g.cows, function (c) { return c.dim; }), 0) + '</td></tr>';
+    }).join('');
+    var idx = html.lastIndexOf('<tbody>');
+    var end = html.indexOf('</tbody>', idx);
+    return html.slice(0, idx) + '<tbody>' + avgRows + html.slice(end);
+  };
+
+  /* ---- ⑤ 異常牛検知 ---- */
+  window.renderAnomaly = function (cows) {
+    var byDim = function (a, b) { return (a.dim ?? 99999) - (b.dim ?? 99999); };
+    var drop = cows.filter(function (c) { return c.milk !== null && c.prevMilk !== null && c.prevMilk > 0 && (c.prevMilk - c.milk) / c.prevMilk > TH.drop; }).sort(byDim);
+    var bhb = cows.filter(function (c) { return c.bhb !== null && c.bhb >= TH.bhb; }).sort(function (a, b) { return b.bhb - a.bhb; });
+    var dnE = cows.filter(function (c) { return c.dim !== null && c.dim <= 60 && c.denovoFA !== null && c.denovoFA < TH.denovoEarly; }).sort(function (a, b) { return a.denovoFA - b.denovoFA; });
+    var dnL = cows.filter(function (c) { return c.dim !== null && c.dim > 60 && c.denovoFA !== null && c.denovoFA < TH.denovoLate; }).sort(function (a, b) { return a.denovoFA - b.denovoFA; });
+    var row = function (c, extra) {
+      return '<tr><td><strong>#' + esc(c.code) + '</strong></td><td>' + esc(c.parity ?? '-') + '</td><td>' + esc(c.dim ?? '-') + '</td>'
+        + '<td>' + fmt(c.milk, 1) + '</td><td>' + fmt(c.prevMilk, 1) + '</td>'
+        + '<td class="' + sccCls(c.scc) + '">' + cScc(c.scc) + '</td>'
+        + '<td>' + cFat(c.fat) + '</td>'
+        + '<td class="' + (c.bhb >= 0.13 ? 'scc-hi' : '') + '">' + cBhb(c.bhb) + '</td>'
+        + '<td>' + cDenovo(c) + '</td>' + (extra || '') + '</tr>';
+    };
+    var head = function (extra) {
+      return '<thead><tr><th>#コード</th><th>産次</th><th>DIM</th><th>今月乳量</th><th>前月乳量</th><th>体細胞</th><th>乳脂率</th><th>BHB</th><th>デノボFA</th>' + (extra || '') + '</tr></thead>';
+    };
+    var block = function (title, list, extraHead, extraCell, sub) {
+      return '<div class="rsect"><div class="rsect-title">' + title + '</div>' + (sub || '')
+        + (list.length
+          ? NOTE + '<div class="tbl-wrap"><table>' + head(extraHead) + '<tbody>' + list.map(function (c) { return row(c, extraCell ? extraCell(c) : ''); }).join('') + '</tbody></table></div>'
+          : '<p class="no-data">該当個体はいません</p>')
+        + '</div>';
+    };
+    return block('前月から乳量15%以上減少（なぜ？）', drop, '<th>減少率</th>', function (c) {
+      return '<td class="scc-hi">' + hl(true, Math.round((c.prevMilk - c.milk) / c.prevMilk * 100) + '%↓') + '</td>';
+    }, '<p style="font-size:12px;color:#5f6368;margin-bottom:8px">分娩後日数（DIM）の短い順</p>')
+      + block('BHB 0.13以上の個体（ケトーシス疑い）', bhb)
+      + block('分娩後60日以内 デノボFA 22%未満（食べてる？）', dnE)
+      + block('分娩後61日以上 デノボFA 28%未満（食べてる？）', dnL);
+  };
+
+  /* ---- 全個体一覧 ---- */
+  window.renderCowList = function (cows) {
+    return '<div class="rsect"><div class="rsect-title">全個体一覧</div>' + NOTE + '<div class="tbl-wrap"><table>'
+      + '<thead><tr><th>#コード</th><th>産次</th><th>分娩日</th><th>DIM</th><th>乳量</th><th>前月乳量</th><th>乳脂率</th><th>SNF</th><th>蛋白質率</th><th>体細胞(今月)</th><th>LS</th><th>BHB</th><th>デノボFA</th><th>乾乳予定</th><th>分娩予定</th><th>授精状況</th><th>管理</th></tr></thead><tbody>'
+      + cows.map(function (c) {
+        return '<tr><td><strong>#' + esc(c.code) + '</strong></td><td>' + esc(c.parity ?? '-') + '</td>'
+          + '<td style="font-size:11px">' + esc(c.calvingDate || '-') + '</td><td>' + esc(c.dim ?? '-') + '</td>'
+          + '<td>' + fmt(c.milk, 1) + '</td><td>' + fmt(c.prevMilk, 1) + '</td>'
+          + '<td>' + cFat(c.fat) + '</td><td>' + fmt(c.snf, 2) + '</td><td>' + fmt(c.prot, 2) + '</td>'
+          + '<td class="' + sccCls(c.scc) + '">' + cScc(c.scc) + '</td>'
+          + '<td class="' + lsCls(c.sccScore) + '">' + cLs(c.sccScore) + '</td>'
+          + '<td class="' + (c.bhb >= 0.13 ? 'scc-hi' : '') + '">' + cBhb(c.bhb) + '</td>'
+          + '<td>' + cDenovo(c) + '</td>'
+          + '<td style="font-size:11px">' + esc(c.dryDate || '-') + '</td><td style="font-size:11px">' + esc(c.calvingExp || '-') + '</td>'
+          + '<td style="font-size:11px">' + (c.aiDate ? esc(c.aiDate) + '(' + esc(c.aiCnt) + '回)' : '-') + '</td>'
+          + '<td style="font-size:11px">' + esc(c.mgmt || '-') + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>';
+  };
+})();
+</script>
 </body>
 </html>
