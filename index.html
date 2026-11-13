@@ -517,6 +517,8 @@ mark.hl{background:linear-gradient(transparent 30%,#fff176 30%);color:inherit;pa
 @media print{
   .tbl-wrap{overflow:visible!important}
   .rsect{page-break-inside:auto!important;break-inside:auto!important}
+  /* 表を含まない節（グラフだけの節）はページをまたがせず、丸ごと次のページへ送る */
+  .rsect:not(:has(table)){page-break-inside:avoid!important;break-inside:avoid!important}
   .rsect-title,.rsect-sub,.sect-page-title,.alert-pct{page-break-after:avoid;break-after:avoid}
   .chart-card,.charts-row,.pie-grid,.pie-cell,.stats-grid,.legend,svg{page-break-inside:avoid;break-inside:avoid}
   table{page-break-inside:auto}
