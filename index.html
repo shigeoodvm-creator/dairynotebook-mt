@@ -341,7 +341,7 @@ tr:hover td{background:#fafbff}
     <h3><span class="howto-no">3</span>CSV を読み込む</h3>
     <ol class="howto-steps">
       <li><strong>基本情報を確認する（任意）</strong>
-        農場名は空欄でも構いません（CSV の農家名が使われます）。「100日以内 乳量目標」は、初産と2産以上それぞれで、これを下回る牛をアラートに出す基準です。</li>
+        農場名は空欄でも構いません（CSV の農家名が使われます）。入力した名前は、次に読み込む CSV の農場にだけ付き、以後もその農場の名前として残ります。「100日以内 乳量目標」は、初産と2産以上それぞれで、これを下回る牛をアラートに出す基準です。</li>
       <li><strong>CSV を入れる</strong>
         「データアップロード」の枠に検定日速報 CSV をドラッグ＆ドロップするか、<span class="howto-ui">ファイルを選択</span> で選びます。</li>
       <li><strong><span class="howto-ui">📊 レポートを作成</span> を押す</strong>
@@ -694,6 +694,163 @@ mark.hl{background:linear-gradient(transparent 30%,#fff176 30%);color:inherit;pa
           + '<td style="font-size:11px">' + esc(c.mgmt || '-') + '</td></tr>';
       }).join('') + '</tbody></table></div></div>';
   };
+})();
+</script>
+<script>
+/* 2026-11-15 追記：データが消える・混ざる不具合の修正（本体は難読化済みのため上書きで対応）
+   1. データファイル未接続・許可待ちの間に取り込んだ月を「取り込み待ち」として覚え、
+      ファイルを読み込んだあとに合わせて書き戻す（以前はファイルの古い内容で上書きされて消えた）
+   2. JSON インポートを月ごとの追加・置き換えにする（以前は農場ごと置き換えて既存の月が消えた）
+   3. 「農場名（任意）」は、次に読み込む CSV の農場にだけ付ける（以前は全農場のレポート題と以後の取り込みに効いた） */
+(function () {
+  var PENDING_KEY = 'mt_pending_v1';
+  var own = function (o, k) { return !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k); };
+  var safeKey = function (k) { return k !== '__proto__' && k !== 'constructor' && k !== 'prototype'; };
+  var readPending = function () {
+    try { var p = JSON.parse(localStorage.getItem(PENDING_KEY) || '{}'); return p && typeof p === 'object' ? p : {}; } catch (e) { return {}; }
+  };
+  var writePending = function (p) {
+    try { if (Object.keys(p).length) localStorage.setItem(PENDING_KEY, JSON.stringify(p)); else localStorage.removeItem(PENDING_KEY); } catch (e) {}
+  };
+  var markPending = function (code, mk) {
+    var p = readPending();
+    (p[code] = p[code] || {})[mk] = 1;
+    writePending(p);
+  };
+  var clearInputName = function () {
+    S.farmName = '';
+    var el = document.getElementById('inp-farmname');
+    if (el) el.value = '';
+  };
+  /* 以前の版で名前欄に残っていた値を片づける（その名前の農場が1つだけなら、その農場の名前として残す） */
+  var migrateFarmName = function () {
+    var old = (S.farmName || '').trim();
+    if (!old) return;
+    var hits = Object.keys(S.farms).filter(function (k) { return S.farms[k] && S.farms[k].name === old; });
+    if (hits.length === 1 && !S.farms[hits[0]].customName) S.farms[hits[0]].customName = old;
+    clearInputName();
+    saveToLocalStorage();
+  };
+
+  /* ---- 1. 取り込み待ち：書き込みが済むまで覚えておく ---- */
+  var origStore = window.storeData;
+  window.storeData = function (parsed) {
+    var override = !!(S.farmName && S.farmName.trim()) && !!parsed && parsed.farmName === S.farmName;
+    var prev = parsed && S.farms[parsed.farmCode];
+    var custom = prev && prev.customName;
+    var r = origStore.apply(this, arguments);
+    var f = parsed && S.farms[parsed.farmCode];
+    if (f) {
+      if (override) { f.customName = S.farmName.trim(); f.name = f.customName; }
+      else if (custom) f.name = custom;
+      if (S.month) markPending(parsed.farmCode, S.month);
+    }
+    if (override) clearInputName();
+    saveFarms();
+    return r;
+  };
+
+  var origWrite = window.writeToFile;
+  window.writeToFile = async function () {
+    if (!fileHandle) return origWrite.apply(this, arguments);
+    var snap = readPending();
+    await origWrite.apply(this, arguments);
+    if (saveState !== 'saved') return;
+    var p = readPending();
+    Object.keys(snap).forEach(function (code) {
+      if (!p[code]) return;
+      Object.keys(snap[code]).forEach(function (mk) { delete p[code][mk]; });
+      if (!Object.keys(p[code]).length) delete p[code];
+    });
+    writePending(p);
+  };
+
+  var origRead = window.readFromFile;
+  window.readFromFile = async function () {
+    var p = readPending(), keep = {};
+    Object.keys(p).forEach(function (code) {
+      var f = S.farms[code];
+      if (!f || !f.months) return;
+      Object.keys(p[code]).forEach(function (mk) {
+        if (!own(f.months, mk)) return;
+        keep[code] = keep[code] || { name: f.name, address: f.address, customName: f.customName, months: {} };
+        keep[code].months[mk] = f.months[mk];
+      });
+    });
+    await origRead.apply(this, arguments);
+    var n = 0;
+    Object.keys(keep).forEach(function (code) {
+      var k = keep[code], f = S.farms[code];
+      if (!f || !f.months) {
+        f = S.farms[code] = { name: k.name, address: k.address, months: {} };
+        if (k.customName) f.customName = k.customName;
+      }
+      Object.keys(k.months).forEach(function (mk) { f.months[mk] = k.months[mk]; n++; });
+    });
+    migrateFarmName();
+    if (n) saveFarms();   // 接続中なら合わせた結果をファイルへ書き戻す（書けたら取り込み待ちから消える）
+  };
+
+  var origDel = window.deleteFarm;
+  window.deleteFarm = function (code) {
+    var r = origDel.apply(this, arguments);
+    if (!S.farms[code]) { var p = readPending(); if (own(p, code)) { delete p[code]; writePending(p); } }
+    return r;
+  };
+
+  /* ---- 2. JSON インポート：月ごとに追加・置き換え ---- */
+  window.importJSON = function (file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var d;
+      try { d = JSON.parse(e.target.result); } catch (err) { d = null; }
+      if (!d || typeof d.farms !== 'object' || !d.farms) {
+        showToast('インポートエラー: 正しいJSONファイルを選択してください', 'error');
+        return;
+      }
+      var nFarm = 0, nMonth = 0, skipped = 0;
+      Object.keys(d.farms).forEach(function (code) {
+        var src = d.farms[code];
+        if (!safeKey(code) || !src || typeof src !== 'object' || !src.months || typeof src.months !== 'object') { skipped++; return; }
+        var months = Object.keys(src.months).filter(function (mk) {
+          var m = src.months[mk];
+          return safeKey(mk) && m && typeof m === 'object' && Array.isArray(m.cows);
+        });
+        if (!months.length) { skipped++; return; }
+        var f = S.farms[code];
+        if (!f || !f.months) {
+          f = S.farms[code] = { name: typeof src.name === 'string' ? src.name : code, address: typeof src.address === 'string' ? src.address : '', months: {} };
+          if (typeof src.customName === 'string' && src.customName) f.customName = src.customName;
+        }
+        months.forEach(function (mk) { f.months[mk] = src.months[mk]; markPending(code, mk); nMonth++; });
+        nFarm++;
+      });
+      if (!nMonth) {
+        showToast('インポートエラー: 取り込めるデータがありませんでした', 'error');
+        return;
+      }
+      saveFarms();
+      render();
+      showToast(nFarm + '農場・' + nMonth + 'か月分をインポートしました（同じ月は置き換え）' + (skipped ? '／読めない農場 ' + skipped + '件' : ''));
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  /* ---- 3. 農場名：レポートの題は各農場の名前を使う ---- */
+  var origReport = window.renderReportPage;
+  window.renderReportPage = function () {
+    var keepName = S.farmName;
+    S.farmName = '';
+    try { return origReport.apply(this, arguments); } finally { S.farmName = keepName; }
+  };
+  var origInput = window.renderInputPage;
+  window.renderInputPage = function () {
+    return origInput.apply(this, arguments).replace('農場名（任意・省略時はCSVの農家名を使用）', '農場名（任意・次に読み込むCSVの農場にだけ付きます）');
+  };
+
+  migrateFarmName();
+  if (S.page === 'input') render();
 })();
 </script>
 </body>
